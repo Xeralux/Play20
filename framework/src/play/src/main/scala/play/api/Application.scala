@@ -32,12 +32,14 @@ import java.lang.reflect.InvocationTargetException
  * @param mode `Dev` or `Prod`, passed as information for the user code
  */
 @implicitNotFound(msg = "You do not have an implicit Application in scope. If you want to bring the current running Application into context, just add import play.api.Play.current")
-class Application(val path: File, val classloader: ClassLoader, val sources: Option[SourceMapper], val mode: Mode.Mode) {
+class Application(val path: File, val classloader: ClassLoader, val sources: Option[SourceMapper], _mode: Mode.Mode) {
 
   private val initialConfiguration = Threads.withContextClassLoader(classloader) {
-    Configuration.load(path, mode)
+    Configuration.load(path, _mode)
   }
 
+  val mode: Mode.Mode = initialConfiguration.getString("play.mode").map { s => Mode.withName(s) }.getOrElse(_mode)
+ 
   // -- Global stuff
 
   private val globalClass = initialConfiguration.getString("application.global").getOrElse(initialConfiguration.getString("global").map { g =>
