@@ -44,6 +44,10 @@ package play.api.mvc {
 
     /**
      * The client IP address.
+     *
+     * If the `X-Forwarded-For` header is present, then this method will return the value in that header
+     * if either the local address is 127.0.0.1, or if `trustxforwarded` is configured to be true in the
+     * application configuration file.
      */
     def remoteAddress: String
 
@@ -63,7 +67,7 @@ package play.api.mvc {
     lazy val acceptLanguages: Seq[play.api.i18n.Lang] = {
       try {
         headers.get(play.api.http.HeaderNames.ACCEPT_LANGUAGE).map { acceptLanguage =>
-          acceptLanguage.split(",").map(l => play.api.i18n.Lang(l.split(";").head)).toSeq
+          acceptLanguage.split("\\s*,\\s*").map(l => play.api.i18n.Lang(l.split(";").head)).toSeq
         }.getOrElse(Nil)
       } catch {
         case e => e.printStackTrace(); Nil
@@ -154,6 +158,20 @@ package play.api.mvc {
 
   }
 
+  object Request {
+
+    def apply[A](rh: RequestHeader, a: A) = new Request[A] {
+      def uri = rh.uri
+      def path = rh.path
+      def method = rh.method
+      def queryString = rh.queryString
+      def headers = rh.headers
+      lazy val remoteAddress = rh.remoteAddress
+      def username = None
+      val body = a
+    }
+  }
+
   /**
    * Wrap an existing request. Useful to extend a request.
    */
@@ -228,19 +246,23 @@ package play.api.mvc {
     /**
      * Retrieve all header values associated with the given key.
      */
-    def getAll(key: String): Seq[String]
+    def getAll(key: String): Seq[String] = toMap.get(key).flatten.toSeq
 
     /**
      * Retrieve all header keys
      */
-    def keys: Set[String]
+    def keys: Set[String] = toMap.keySet
 
     /**
      * Transform the Headers to a Map
      */
-    def toMap: Map[String, Seq[String]] = keys.map { headerKey =>
-      (headerKey, getAll(headerKey))
-    }.toMap
+    lazy val toMap: Map[String, Seq[String]] = {
+      import collection.immutable.TreeMap
+      import play.core.utils.CaseInsensitiveOrdered
+      TreeMap(data: _*)(CaseInsensitiveOrdered)
+    }
+
+    protected def data: Seq[(String, Seq[String])]
 
     /**
      * Transform the Headers to a Map by ignoring multiple values.
@@ -248,6 +270,8 @@ package play.api.mvc {
     def toSimpleMap: Map[String, String] = keys.map { headerKey =>
       (headerKey, apply(headerKey))
     }.toMap
+
+    override def toString = toMap.toString
 
   }
 
@@ -585,7 +609,7 @@ package play.api.mvc {
      * @return a valid Set-Cookie header value
      */
     def merge(cookieHeader: String, cookies: Seq[Cookie], discard: Seq[String] = Nil): String = {
-      encode(decode(cookieHeader) ++ cookies, discard)
+      encode(cookies ++ decode(cookieHeader), discard)
     }
 
   }
