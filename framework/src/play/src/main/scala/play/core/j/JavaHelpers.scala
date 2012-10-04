@@ -6,6 +6,13 @@ import play.mvc.Http.{ Context => JContext, Request => JRequest, RequestBody => 
 
 import scala.collection.JavaConverters._
 
+
+class EitherToFEither[A,B]() extends play.libs.F.Function[Either[A,B],play.libs.F.Either[A,B]] {
+
+  def apply(e:Either[A,B]): play.libs.F.Either[A,B] = e.fold(play.libs.F.Either.Left(_), play.libs.F.Either.Right(_))
+
+}
+
 /**
  *
  * provides helper methods that manage java to scala Result and scala to java Context
@@ -15,6 +22,7 @@ trait JavaHelpers {
   import collection.JavaConverters._
   import play.api.mvc._
   import play.mvc.Http.RequestBody
+
 
   /**
    * creates a scala result from java context and result objects
@@ -56,6 +64,8 @@ trait JavaHelpers {
 
       def method = req.method
 
+      def version = req.version
+
       def remoteAddress = req.remoteAddress
 
       def host = req.host
@@ -91,9 +101,13 @@ trait JavaHelpers {
    * @param request
    */
   def createJavaContext(req: RequestHeader): JContext = {
-    new JContext(createJavaRequest(req),
+    new JContext(
+      req.id,
+      createJavaRequest(req),
       req.session.data.asJava,
-      req.flash.data.asJava)
+      req.flash.data.asJava,
+      req.tags.mapValues(_.asInstanceOf[AnyRef]).asJava
+    )
   }
 
   /**
@@ -101,11 +115,13 @@ trait JavaHelpers {
    * @param request
    */
   def createJavaContext(req: Request[RequestBody]): JContext = {
-    new JContext(new JRequest {
+    new JContext(req.id, new JRequest {
 
       def uri = req.uri
 
       def method = req.method
+
+      def version = req.version
 
       def remoteAddress = req.remoteAddress
 
@@ -136,7 +152,30 @@ trait JavaHelpers {
 
     },
       req.session.data.asJava,
-      req.flash.data.asJava)
+      req.flash.data.asJava,
+      req.tags.mapValues(_.asInstanceOf[AnyRef]).asJava)
+  }
+
+  /**
+   * Invoke the given function with the right context set, converting the scala request to a
+   * Java request, and converting the resulting Java result to a Scala result, before returning
+   * it.
+   *
+   * This is intended for use by methods in the JavaGlobalSettingsAdapter, which need to be handled
+   * like Java actions, but are not Java actions.
+   *
+   * @param request The request
+   * @param f The function to invoke
+   * @return The result
+   */
+  def invokeWithContext(request: RequestHeader, f: JRequest => Option[JResult]): Option[Result] = {
+    val javaContext = createJavaContext(request)
+    try {
+      JContext.current.set(javaContext)
+      f(javaContext.request()).map(result => createResult(javaContext, result))
+    } finally {
+      JContext.current.remove()
+    }
   }
 
 }

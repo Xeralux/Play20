@@ -10,7 +10,7 @@ import sbinary.DefaultProtocol.StringFormat
 import play.api._
 import play.core._
 
-import play.utils.Colors
+import play.console.Colors
 
 import PlayExceptions._
 import PlayKeys._
@@ -66,13 +66,13 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse {
   private[this] var commonClassLoader: ClassLoader = _
 
   val playCommonClassloader = TaskKey[ClassLoader]("play-common-classloader")
-  val playCommonClassloaderTask = (scalaInstance, dependencyClasspath in Compile) map { (si, classpath) =>
+  val playCommonClassloaderTask = (dependencyClasspath in Compile) map { classpath =>
     lazy val commonJars: PartialFunction[java.io.File, java.net.URL] = {
       case jar if jar.getName.startsWith("h2-") || jar.getName == "h2.jar" => jar.toURI.toURL
     }
 
     if (commonClassLoader == null) {
-      commonClassLoader = new java.net.URLClassLoader(classpath.map(_.data).collect(commonJars).toArray, si.loader) {
+      commonClassLoader = new java.net.URLClassLoader(classpath.map(_.data).collect(commonJars).toArray, null /* important here, don't depend of the sbt classLoader! */) {
         override def toString = "Common ClassLoader: " + getURLs.map(_.toString).mkString(",")
       }
     }
@@ -91,11 +91,11 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse {
     val prefix = "javascripts" + java.io.File.separator
     val subDir = prefix + requireSubFolder
     val rjoldDir = crossTarget / "classes" / "public" / subDir
-    val rjnewDir = new java.io.File(rjoldDir.getAbsolutePath + "-min")
     val jsFiles = (rjoldDir ** "*.js").filter(_.getName.endsWith("min.js") == false).get.toSet
     val buildDesc = crossTarget / "classes" / "public" / buildDescName
-    val relativeModulePath = (file: File) => rjoldDir.toURI.relativize(file.toURI).toString.replace(".js", "")
     if (jsFiles.isEmpty == false) {
+      val rjnewDir = new java.io.File(rjoldDir.getAbsolutePath + "-min")
+      val relativeModulePath = (file: File) => rjoldDir.toURI.relativize(file.toURI).toString.replace(".js", "")
       IO.write(buildDesc,
         """({
               appDir: """" + subDir + """",
@@ -121,12 +121,10 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse {
     cr
   }
 
-  val buildRequireAndPackage = TaskKey[File]("play-build-require-and-package")
-  val buildRequireAndPackageTask = (packageBin in Compile).dependsOn(buildRequire)
 
   val playPackageEverything = TaskKey[Seq[File]]("play-package-everything")
   val playPackageEverythingTask = (state, thisProjectRef, crossTarget) flatMap { (s, r, crossTarget) =>
-    inAllDependencies(r, buildRequireAndPackage.task, Project structure s).join
+    inAllDependencies(r, (packageBin in Compile).task, Project structure s).join
   }
 
   val playCopyAssets = TaskKey[Seq[(File, File)]]("play-copy-assets")
@@ -351,8 +349,8 @@ exec java $* -cp $classpath """ + customFileName.map(fn => "-Dconfig.file=`dirna
 
   // ----- Source generators
 
-  val RouteFiles = (confDirectory: File, generatedDir: File, additionalImports: Seq[String]) => {
-    import play.core.Router.RoutesCompiler._
+  val RouteFiles = (state: State, confDirectory: File, generatedDir: File, additionalImports: Seq[String]) => {
+    import play.router.RoutesCompiler._
 
     ((generatedDir ** "routes.java").get ++ (generatedDir ** "routes_*.scala").get).map(GeneratedSource(_)).foreach(_.sync())
     try {
@@ -361,7 +359,7 @@ exec java $* -cp $classpath """ + customFileName.map(fn => "-Dconfig.file=`dirna
       }
     } catch {
       case RoutesCompilationError(source, message, line, column) => {
-        throw RoutesCompilationException(source, message, line, column.map(_ - 1))
+        throw reportCompilationError(state, RoutesCompilationException(source, message, line, column.map(_ - 1)))
       }
       case e => throw e
     }
@@ -370,7 +368,7 @@ exec java $* -cp $classpath """ + customFileName.map(fn => "-Dconfig.file=`dirna
 
   }
 
-  val ScalaTemplates = (sourceDirectory: File, generatedDir: File, templateTypes: PartialFunction[String, (String, String)], additionalImports: Seq[String]) => {
+  val ScalaTemplates = (state: State, sourceDirectory: File, generatedDir: File, templateTypes: PartialFunction[String, (String, String)], additionalImports: Seq[String]) => {
     import play.templates._
 
     val templateExt: PartialFunction[File, (File, String, String, String)] = {
@@ -394,7 +392,7 @@ exec java $* -cp $classpath """ + customFileName.map(fn => "-Dconfig.file=`dirna
       }
     } catch {
       case TemplateCompilationError(source, message, line, column) => {
-        throw TemplateCompilationException(source, message, line, column - 1)
+        throw reportCompilationError(state, TemplateCompilationException(source, message, line, column - 1))
       }
       case e => throw e
     }
@@ -486,7 +484,10 @@ exec java $* -cp $classpath """ + customFileName.map(fn => "-Dconfig.file=`dirna
         val sharedClasses = Seq(
           classOf[play.core.SBTLink].getName,
           classOf[play.core.server.ServerWithStop].getName,
-          classOf[play.api.PlayException.UsefulException].getName,
+          classOf[play.api.UsefulException].getName,
+          classOf[play.api.PlayException].getName,
+          classOf[play.api.PlayException.InterestingLines].getName,
+          classOf[play.api.PlayException.RichDescription].getName,
           classOf[play.api.PlayException.ExceptionSource].getName,
           classOf[play.api.PlayException.ExceptionAttachment].getName)
 
@@ -516,9 +517,9 @@ exec java $* -cp $classpath """ + customFileName.map(fn => "-Dconfig.file=`dirna
           findResources.setAccessible(true)
           val resources1 = reloader.currentApplicationClassLoader.map(findResources.invoke(_, name).asInstanceOf[java.util.Enumeration[java.net.URL]]).getOrElse(new java.util.Vector[java.net.URL]().elements)
           val resources2 = super.getResources(name)
-          val resources = new java.util.Vector[java.net.URL]
-          while (resources1.hasMoreElements) resources.add(resources1.nextElement)
-          while (resources2.hasMoreElements) resources.add(resources2.nextElement)
+          val resources = new java.util.Vector[java.net.URL](
+            (resources1.asScala.toList ++ resources2.asScala.toList).distinct.asJava
+          )
           resources.elements
         }
 
@@ -530,7 +531,7 @@ exec java $* -cp $classpath """ + customFileName.map(fn => "-Dconfig.file=`dirna
 
       lazy val reloader = newReloader(state, playReload, applicationLoader)
 
-      val mainClass = applicationLoader.loadClass(classOf[play.core.server.NettyServer].getName)
+      val mainClass = applicationLoader.loadClass("play.core.server.NettyServer")
       val mainDev = mainClass.getMethod("mainDev", classOf[SBTLink], classOf[Int])
 
       // Run in DEV
@@ -712,7 +713,7 @@ exec java $* -cp $classpath """ + customFileName.map(fn => "-Dconfig.file=`dirna
         |reload                     Reload the current application build file.
         |run <port>                 Run the current application in DEV mode.
         |test                       Run Junit tests and/or Specs from the command line
-        |eclipsify                  generate eclipse project file
+        |eclipse                    generate eclipse project file
         |idea                       generate Intellij IDEA project file
         |sh <command to run>        execute a shell command 
         |start <port>               Start the current application in another JVM in PROD mode.

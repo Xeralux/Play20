@@ -1,5 +1,6 @@
 package play.api.libs.iteratee
 
+import scala.concurrent.Future
 import play.api.libs.concurrent._
 import play.api.libs.concurrent.execution.defaultContext
 
@@ -95,7 +96,7 @@ object Enumeratee {
 
     }
 
-    def getInside[T](it: Iteratee[E, T]): Promise[(Option[Either[(String, Input[E]), (T, Input[E])]], Iteratee[E, T])] = {
+    def getInside[T](it: Iteratee[E, T]): Future[(Option[Either[(String, Input[E]), (T, Input[E])]], Iteratee[E, T])] = {
       it.pureFold {
         case Step.Done(a, e) => Some(Right((a, e)))
         case Step.Cont(k) => None
@@ -133,7 +134,7 @@ object Enumeratee {
   }
 
   def mapConcatInput[From] = new {
-    def apply[To](f: From => Seq[Input[To]]) = mapInputFlatten[From](in => Enumerator.enumerateSeq2(f(in)))
+    def apply[To](f: From => Seq[Input[To]]) = mapFlatten[From](in => Enumerator.enumerateSeq2(f(in)))
   }
 
   def mapConcat[From] = new {
@@ -158,16 +159,11 @@ object Enumeratee {
   }
 
   def mapInputFlatten[From] = new {
-    def apply[To](f: From => Enumerator[To]) = new CheckDone[From, To] {
+    def apply[To](f: Input[From] => Enumerator[To]) = new CheckDone[From, To] {
 
       def step[A](k: K[To, A]): K[From, Iteratee[To, A]] = {
-        case Input.El(e) =>
-          new CheckDone[From, To] { def continue[A](k: K[To, A]) = Cont(step(k)) } &> Iteratee.flatten(f(e)(Cont(k)))
-
-        case in @ Input.Empty =>
-          new CheckDone[From, To] { def continue[A](k: K[To, A]) = Cont(step(k)) } &> k(in)
-
-        case Input.EOF => Done(Cont(k), Input.EOF)
+        case in =>
+          new CheckDone[From, To] { def continue[A](k: K[To, A]) = Cont(step(k)) } &> Iteratee.flatten(f(in)(Cont(k)))
       }
 
       def continue[A](k: K[To, A]) = Cont(step(k))
@@ -175,7 +171,7 @@ object Enumeratee {
   }
 
   def mapInputM[From] = new {
-    def apply[To](f: Input[From] => Promise[Input[To]]) = new CheckDone[From, To] {
+    def apply[To](f: Input[From] => Future[Input[To]]) = new CheckDone[From, To] {
 
       def step[A](k: K[To, A]): K[From, Iteratee[To, A]] = {
         case in @ (Input.El(_) | Input.Empty) =>
@@ -189,7 +185,7 @@ object Enumeratee {
   }
 
   def mapM[E] = new {
-    def apply[NE](f: E => Promise[NE]): Enumeratee[E, NE] = mapInputM[E] {
+    def apply[NE](f: E => Future[NE]): Enumeratee[E, NE] = mapInputM[E] {
       case Input.Empty => Promise.pure(Input.Empty)
       case Input.EOF => Promise.pure(Input.EOF)
       case Input.El(e) => f(e).map(Input.El(_))

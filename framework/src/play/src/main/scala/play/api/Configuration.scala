@@ -2,7 +2,7 @@ package play.api
 
 import java.io._
 
-import com.typesafe.config.{ Config, ConfigFactory, ConfigList, ConfigParseOptions, ConfigSyntax, ConfigObject, ConfigOrigin, ConfigException }
+import com.typesafe.config._
 
 import scala.collection.JavaConverters._
 
@@ -62,17 +62,17 @@ object Configuration {
   /**
    * Create a ConfigFactory object from the data passed as a Map.
    */
-  def from(data: Map[String, String]) = {
+  def from(data: Map[String, Any]) = {
     Configuration(ConfigFactory.parseMap(data.asJava))
   }
 
   private def configError(origin: ConfigOrigin, message: String, e: Option[Throwable] = None): PlayException = {
     import scalax.io.JavaConverters._
-    new PlayException("Configuration error", message, e) with PlayException.ExceptionSource {
-      def line = Option(origin.lineNumber)
-      def position = None
-      def input = Option(origin.url).map(_.asInput)
-      def sourceName = Option(origin.filename)
+    new PlayException.ExceptionSource("Configuration error", message, e.orNull) {
+      def line = Option(origin.lineNumber:java.lang.Integer).orNull
+      def position = null
+      def input = Option(origin.url).map(_.asInput.string).orNull
+      def sourceName = Option(origin.filename).orNull
       override def toString = "Configuration error: " + getMessage
     }
   }
@@ -523,7 +523,13 @@ case class Configuration(underlying: Config) {
    * }}}
    * @return the set of direct sub-keys available in this configuration
    */
-  def subKeys: Set[String] = keys.map(_.split('.').head)
+  def subKeys: Set[String] = underlying.root().keySet().asScala.toSet
+
+  /**
+   * Returns every path as a set of key to value pairs, by recursively iterating through the
+   * config objects.
+   */
+  def entrySet: Set[(String, ConfigValue)] = underlying.entrySet().asScala.map(e => e.getKey -> e.getValue).toSet
 
   /**
    * Creates a configuration error for a specific configuration key.

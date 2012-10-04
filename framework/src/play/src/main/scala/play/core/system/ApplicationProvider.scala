@@ -3,9 +3,9 @@ package play.core
 import java.io._
 import java.net._
 
-import akka.dispatch.Future
-import akka.dispatch.Await
-import akka.util.duration._
+import scala.concurrent.Future
+import scala.concurrent.Await
+import scala.concurrent.util.duration._
 
 import play.api._
 import play.api.mvc._
@@ -15,17 +15,11 @@ import play.api.mvc._
  */
 trait SourceMapper {
 
-  def sourceOf(className: String): Option[File]
+  def sourceOf(className: String, line: Option[Int] = None): Option[(File, Option[Int])]
 
-  def sourceFor(e: Throwable): Option[(File, Int)] = {
-    e.getStackTrace.find(element => sourceOf(element.getClassName).isDefined).map { interestingStackTrace =>
-      sourceOf(interestingStackTrace.getClassName).get -> interestingStackTrace.getLineNumber
-    }.map {
-      case (source, line) => {
-        play.templates.MaybeGeneratedSource.unapply(source).map { generatedSource =>
-          generatedSource.source.get -> generatedSource.mapLine(line)
-        }.getOrElse(source -> line)
-      }
+  def sourceFor(e: Throwable): Option[(File, Option[Int])] = {
+    e.getStackTrace.find(element => sourceOf(element.getClassName).isDefined).flatMap { interestingStackTrace =>
+      sourceOf(interestingStackTrace.getClassName, Option(interestingStackTrace.getLineNumber))
     }
   }
 
@@ -46,7 +40,7 @@ trait ApplicationProvider {
  */
 class StaticApplication(applicationPath: File) extends ApplicationProvider {
 
-  val application = new Application(applicationPath, this.getClass.getClassLoader, None, Mode.Prod)
+  val application = new DefaultApplication(applicationPath, this.getClass.getClassLoader, None, Mode.Prod)
 
   Play.start(application)
 
@@ -71,12 +65,22 @@ class TestApplication(application: Application) extends ApplicationProvider {
  */
 class ReloadableApplication(sbtLink: SBTLink) extends ApplicationProvider {
 
+  // Use plain Java call here in case of scala classloader mess
+  {
+    if(System.getProperty("play.debug.classpath") == "true") {
+      System.out.println("\n---- Current ClassLoader ----\n")
+      System.out.println(this.getClass.getClassLoader) 
+      System.out.println("\n---- The where is Scala? test ----\n")
+      System.out.println(this.getClass.getClassLoader.getResource("scala/Predef$.class"))
+    }
+  }
+
   lazy val path = sbtLink.projectPath
 
   println(play.utils.Colors.magenta("--- (Running the application from SBT, auto-reloading is enabled) ---"))
   println()
 
-  var lastState: Either[Throwable, Application] = Left(PlayException("Not initialized", "?"))
+  var lastState: Either[Throwable, Application] = Left(new PlayException("Not initialized", "?"))
 
   def get = {
 
@@ -88,7 +92,9 @@ class ReloadableApplication(sbtLink: SBTLink) extends ApplicationProvider {
       // Because we are on DEV mode here, it doesn't really matter
       // but it's more coherent with the way it works in PROD mode.
 
-      implicit def dispatcher = play.core.Invoker.system.dispatcher
+      import akka.dispatch.sip14Adapters._
+
+      implicit def dispatcher: scala.concurrent.ExecutionContext = play.core.Invoker.system.dispatcher
 
       Await.result(Future {
 
@@ -100,7 +106,7 @@ class ReloadableApplication(sbtLink: SBTLink) extends ApplicationProvider {
 
         reloaded.right.flatMap { maybeClassLoader =>
 
-          val maybeApplication: Option[Either[Throwable, Application]] = maybeClassLoader.map { classloader =>
+          val maybeApplication: Option[Either[Throwable, Application]] = maybeClassLoader.map { projectClassloader =>
             try {
 
               if (lastState.isRight) {
@@ -109,9 +115,17 @@ class ReloadableApplication(sbtLink: SBTLink) extends ApplicationProvider {
                 println()
               }
 
-              val newApplication = new Application(path, classloader, Some(new SourceMapper {
-                def sourceOf(className: String) = Option(sbtLink.findSource(className))
-              }), Mode.Dev)
+              val reloadable = this
+
+              val newApplication = new DefaultApplication(reloadable.path, projectClassloader, Some(new SourceMapper {
+                def sourceOf(className: String, line: Option[Int]) = {
+                  Option(sbtLink.findSource(className, line.map(_.asInstanceOf[java.lang.Integer]).orNull)).flatMap {
+                    case Array(file: java.io.File, null) => Some((file, None))
+                    case Array(file: java.io.File, line: java.lang.Integer) => Some((file, Some(line)))
+                    case _ => None
+                  }
+                }
+              }),Mode.Dev)
 
               Play.start(newApplication)
 
@@ -197,7 +211,7 @@ class ReloadableApplication(sbtLink: SBTLink) extends ApplicationProvider {
           documentationHome.flatMap { home =>
             Option(new java.io.File(home, "manual/book/Book")).filter(_.exists)
           }.map { book =>
-            val pages = Path(book).slurpString.split('\n').toSeq.map(_.trim)
+            val pages = Path(book).string.split('\n').toSeq.map(_.trim)
             Ok(views.html.play20.book(pages))
           }.getOrElse(NotFound("Resource not found [Book]"))
         }
@@ -280,8 +294,8 @@ class ReloadableApplication(sbtLink: SBTLink) extends ApplicationProvider {
               Ok(
                 views.html.play20.manual(
                   page,
-                  Some(sbtLink.markdownToHtml(pageSource.slurpString/*, linkRender*/)),
-                  maybeSidebar.map(s => sbtLink.markdownToHtml(s.slurpString/*, linkRender*/))
+                  Some(sbtLink.markdownToHtml(pageSource.string/*, linkRender*/)),
+                  maybeSidebar.map(s => sbtLink.markdownToHtml(s.string/*, linkRender*/))
                 )
               )
             }

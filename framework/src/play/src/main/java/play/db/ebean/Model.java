@@ -4,7 +4,23 @@ import java.util.*;
 import java.beans.*;
 import java.lang.reflect.*;
 
-import com.avaje.ebean.*;
+import com.avaje.ebean.Query.UseIndex;
+import com.avaje.ebean.Ebean;
+import com.avaje.ebean.OrderBy;
+import com.avaje.ebean.ExpressionList;
+import com.avaje.ebean.Query;
+import com.avaje.ebean.RawSql;
+import com.avaje.ebean.ExpressionFactory;
+import com.avaje.ebean.PagingList;
+import com.avaje.ebean.FutureRowCount;
+import com.avaje.ebean.FutureList;
+import com.avaje.ebean.FutureIds;
+import com.avaje.ebean.FetchConfig;
+import com.avaje.ebean.QueryListener;
+import com.avaje.ebean.QueryIterator;
+import com.avaje.ebean.EbeanServer;
+import com.avaje.ebean.Filter;
+import com.avaje.ebean.QueryResultVisitor;
 
 import play.libs.F.*;
 import static play.libs.F.*;
@@ -204,8 +220,7 @@ public class Model {
         private final Class<I> idType;
         private final Class<T> type;
         private final String serverName;
-        private Query<T> query;
-        
+
         /**
          * Creates a finder for entity of type <code>T</code> with ID of type <code>I</code>.
          */
@@ -477,34 +492,6 @@ public class Model {
         }
 
         /**
-         * Same as {@link #fetch(String)}
-         */
-        public Query<T> join(String path) {
-            return query().join(path);
-        }
-
-        /**
-         * Same as {@link #fetch(String, FetchConfig)}
-         */
-        public Query<T> join(String path, JoinConfig joinConfig) {
-            return query().join(path, joinConfig);
-        }
-
-        /**
-         * Same as {@link #fetch(String, String)}.
-         */
-        public Query<T> join(String assocProperty, String fetchProperties) {
-            return query().join(assocProperty, fetchProperties);
-        }
-
-        /**
-         * Additionally specifies a <code>JoinConfig</code> to specify a 'query join' and or define the lazy loading query.
-         */
-        public Query<T> join(String assocProperty, String fetchProperties, JoinConfig joinConfig) {
-            return query().join(assocProperty, fetchProperties, joinConfig);
-        }
-
-        /**
          * Returns the <code>order by</code> clause so that you can append an ascending or descending property to the <code>order by</code> clause.
          * <p>
          * This is exactly the same as {@link #orderBy}.
@@ -650,10 +637,10 @@ public class Model {
         }
 
         /**
-         * Deprecated.
+         * Sets the OQL query to run
          */
         public Query<T> setQuery(String oql) {
-            return query().setQuery(oql);
+            return server().createQuery(type, oql);
         }
 
         /**

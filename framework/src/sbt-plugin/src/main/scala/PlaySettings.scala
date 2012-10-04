@@ -4,7 +4,7 @@ import Keys._
 import PlayKeys._
 
 trait PlaySettings {
-  this: PlayCommands =>
+  this: PlayCommands with PlayPositionMapper =>
 
   lazy val defaultJavaSettings = Seq[Setting[_]](
 
@@ -59,6 +59,10 @@ trait PlaySettings {
 
   lazy val defaultSettings = Seq[Setting[_]](
 
+    scalaVersion := play.core.PlayVersion.scalaVersion,
+
+    playPlugin := false,
+
     resolvers ++= Seq(
       "Typesafe Releases Repository" at "http://repo.typesafe.com/typesafe/releases/",
       "Typesafe Snapshots Repository" at "http://repo.typesafe.com/typesafe/snapshots/"
@@ -81,7 +85,13 @@ trait PlaySettings {
 
     distDirectory <<= baseDirectory / "dist",
 
-    libraryDependencies += "play" %% "play" % play.core.PlayVersion.current,
+    libraryDependencies <+= (playPlugin) { isPlugin =>
+      val d = "play" %% "play" % play.core.PlayVersion.current
+      if(isPlugin)
+         d % "provided"
+      else
+        d
+    },
 
     libraryDependencies += "play" %% "play-test" % play.core.PlayVersion.current % "test",
 
@@ -108,12 +118,12 @@ trait PlaySettings {
 
     testResultReporterReset <<= testResultReporterResetTask,
 
-    sourceGenerators in Compile <+= (confDirectory, sourceManaged in Compile, routesImport) map RouteFiles,
+    sourceGenerators in Compile <+= (state, confDirectory, sourceManaged in Compile, routesImport) map RouteFiles,
 
-    // Adds config directory's source files to continuous hot reloading 
+    // Adds config directory's source files to continuous hot reloading
     watchSources <+= confDirectory map { all => all },
 
-    sourceGenerators in Compile <+= (sourceDirectory in Compile, sourceManaged in Compile, templatesTypes, templatesImport) map ScalaTemplates,
+    sourceGenerators in Compile <+= (state, sourceDirectory in Compile, sourceManaged in Compile, templatesTypes, templatesImport) map ScalaTemplates,
 
     // Adds app directory's source files to continuous hot reloading
     watchSources <++= baseDirectory map { path => ((path / "app") ** "*").get },
@@ -124,7 +134,7 @@ trait PlaySettings {
 
     copyResources in Compile <<= (copyResources in Compile, playCopyAssets) map { (r, pr) => r ++ pr },
 
-    mainClass in (Compile, run) := Some(classOf[play.core.server.NettyServer].getName),
+    mainClass in (Compile, run) := Some("play.core.server.NettyServer"),
 
     compile in (Compile) <<= PostCompile(scope = Compile),
 
@@ -150,7 +160,7 @@ trait PlaySettings {
 
     ebeanEnabled := false,
 
-    logManager <<= extraLoggers(PlayLogManager.default),
+    logManager <<= extraLoggers(PlayLogManager.default(playPositionMapper)),
 
     ivyLoggingLevel := UpdateLogging.DownloadOnly,
 
@@ -178,7 +188,7 @@ trait PlaySettings {
 
     buildRequire <<= buildRequireTask,
 
-    buildRequireAndPackage <<= buildRequireAndPackageTask,
+    packageBin in Compile <<= (packageBin in Compile).dependsOn(buildRequire),
 
     resourceGenerators in Compile <+= LessCompiler,
     resourceGenerators in Compile <+= CoffeescriptCompiler,

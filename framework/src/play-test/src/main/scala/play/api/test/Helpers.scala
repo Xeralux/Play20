@@ -1,6 +1,8 @@
 package play.api.test
 
 import play.api._
+import db.DBPlugin
+import db.evolutions.Evolutions
 import play.api.mvc._
 import play.api.http._
 
@@ -31,15 +33,17 @@ object Helpers extends Status with HeaderNames {
    * Executes a block of code in a running application.
    */
   def running[T](fakeApp: FakeApplication)(block: => T): T = {
-    try {
-      Play.start(fakeApp)
-      block
-    } finally {
-      Play.stop()
-      play.api.libs.concurrent.Promise.resetSystem()
-      play.core.Invoker.system.shutdown()
-      play.core.Invoker.uninit()
-      play.api.libs.ws.WS.resetClient()
+    synchronized {
+      try {
+        Play.start(fakeApp)
+        block
+      } finally {
+        Play.stop()
+        play.api.libs.concurrent.Promise.resetSystem()
+        play.core.Invoker.system.shutdown()
+        play.core.Invoker.uninit()
+        play.api.libs.ws.WS.resetClient()
+      }
     }
   }
 
@@ -47,11 +51,13 @@ object Helpers extends Status with HeaderNames {
    * Executes a block of code in a running server.
    */
   def running[T](testServer: TestServer)(block: => T): T = {
-    try {
-      testServer.start()
-      block
-    } finally {
-      testServer.stop()
+    synchronized {
+      try {
+        testServer.start()
+        block
+      } finally {
+        testServer.stop()
+      }
     }
   }
 
@@ -60,22 +66,35 @@ object Helpers extends Status with HeaderNames {
    */
   def running[T, WEBDRIVER <: WebDriver](testServer: TestServer, webDriver: Class[WEBDRIVER])(block: TestBrowser => T): T = {
     var browser: TestBrowser = null
-    try {
-      testServer.start()
-      browser = TestBrowser.of(webDriver)
-      block(browser)
-    } finally {
-      if (browser != null) {
-        browser.quit()
+    synchronized {
+      try {
+        testServer.start()
+        browser = TestBrowser.of(webDriver)
+        block(browser)
+      } finally {
+        if (browser != null) {
+          browser.quit()
+        }
+        testServer.stop()
       }
-      testServer.stop()
     }
   }
 
   /**
+   * The port to use for a test server. Defaults to 19001. May be configured using the system property
+   * testserver.port
+   */
+  lazy val testServerPort = Option(System.getProperty("testserver.port")).map(_.toInt).getOrElse(19001)
+
+  /**
    * Apply pending evolutions for the given DB.
    */
-  def evolutionFor(dbName: String, path: java.io.File = new java.io.File(".")): Unit = play.api.db.evolutions.OfflineEvolutions.applyScript(path, this.getClass.getClassLoader, dbName)
+  def evolutionFor(dbName: String, path: java.io.File = new java.io.File(".")) {
+    Play.current.plugin[DBPlugin] map { db =>
+      val script = Evolutions.evolutionScript(db.api, path, db.getClass.getClassLoader, dbName)
+      Evolutions.applyScript(db.api, dbName, script)
+    }
+  }
 
   /**
    * Extracts the Content-Type of this Content value.
@@ -177,6 +196,7 @@ object Helpers extends Status with HeaderNames {
   /**
    * Use the Router to determine the Action to call for this request and executes it.
    */
+  @deprecated("Use `route` instead.", "2.1.0")
   def routeAndCall[T](request: FakeRequest[T]): Option[Result] = {
     routeAndCall(this.getClass.getClassLoader.loadClass("Routes").asInstanceOf[Class[play.core.Router.Routes]], request)
   }
@@ -184,6 +204,7 @@ object Helpers extends Status with HeaderNames {
   /**
    * Use the Router to determine the Action to call for this request and executes it.
    */
+  @deprecated("Use `route` instead.", "2.1.0")
   def routeAndCall[T, ROUTER <: play.core.Router.Routes](router: Class[ROUTER], request: FakeRequest[T]): Option[Result] = {
     val routes = router.getClassLoader.loadClass(router.getName + "$").getDeclaredField("MODULE$").get(null).asInstanceOf[play.core.Router.Routes]
     routes.routes.lift(request).map {
@@ -203,14 +224,48 @@ object Helpers extends Status with HeaderNames {
   }
 
   /**
+   * Use the Router to determine the Action to call for this request and executes it.
+   */
+  def route(rh: RequestHeader): Option[Result] = route(Play.current, rh)
+
+  /**
+   * Use the Router to determine the Action to call for this request and executes it.
+   */
+  def route(app: Application, rh: RequestHeader): Option[Result] = {
+    app.global.onRouteRequest(rh).flatMap {
+      case a: EssentialAction => {
+        Some(AsyncResult(app.global.doFilter(a.asInstanceOf[EssentialAction])(rh).run))
+      }
+      case _ => None
+    }
+  }
+
+  // Java compatibility
+  def jRoute(app: Application, rh: RequestHeader, body: Array[Byte]): Option[Result] = route(app, rh, body)(Writeable.wBytes)
+  def jRoute(rh: RequestHeader, body: Array[Byte]): Option[Result] = jRoute(Play.current, rh, body)
+
+  def route[T](app: Application, rh: RequestHeader, body: T)(implicit w: Writeable[T]): Option[Result] = {
+    app.global.onRouteRequest(rh).flatMap {
+      case a: EssentialAction => {
+        Some(AsyncResult(app.global.doFilter(
+          a.asInstanceOf[EssentialAction])(rh).feed(Input.El(w.transform(body))).flatMap(_.run)
+        ))
+      }
+      case _ => None
+    }
+  }
+
+  def route[T](rh: RequestHeader, body: T)(implicit w: Writeable[T]): Option[Result] = route(Play.current, rh, body)
+
+  /**
    * Block until a Promise is redeemed.
    */
-  def await[T](p: play.api.libs.concurrent.Promise[T]): T = await(p, 5000)
+  def await[T](p: scala.concurrent.Future[T]): T = await(p, 5000)
 
   /**
    * Block until a Promise is redeemed with the specified timeout.
    */
-  def await[T](p: play.api.libs.concurrent.Promise[T], timeout: Long, unit: java.util.concurrent.TimeUnit = java.util.concurrent.TimeUnit.MILLISECONDS): T = p.await(timeout, unit).get
+  def await[T](p: scala.concurrent.Future[T], timeout: Long, unit: java.util.concurrent.TimeUnit = java.util.concurrent.TimeUnit.MILLISECONDS): T = p.await(timeout, unit).get
 
   /**
    * Constructs a in-memory (h2) database configuration to add to a FakeApplication.

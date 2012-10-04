@@ -321,6 +321,20 @@ object Forms {
   def optional[A](mapping: Mapping[A]): Mapping[Option[A]] = OptionalMapping(mapping)
 
   /**
+   * Defines an default mapping, if the parameter is not present, provide a default value.
+   *
+   * {{{
+   * Form(
+   *   "name" -> default(text, "The default text")
+   * )
+   * }}}
+   *
+   * @param mapping The mapping to make optional.
+   * @param value The default value when mapping and the field is not present.
+   */
+  def default[A](mapping: Mapping[A], value:A): Mapping[A] = OptionalMapping(mapping).transform(_.getOrElse(value), Some(_))
+
+  /**
    * Defines a repeated mapping.
    * {{{
    * Form(
@@ -409,7 +423,7 @@ object Forms {
    * }}}
    */
   val email: Mapping[String] = of[String] verifying Constraints.pattern(
-    """\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}\b""".r,
+    """\b[a-zA-Z0-9.!#$%&’*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*\b""".r,
     "constraint.email",
     "error.email")
 

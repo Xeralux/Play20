@@ -6,9 +6,18 @@ import jline._
 import play.api._
 import play.core._
 
-import play.utils.Colors
+import play.console.Colors
 
-object PlayProject extends Plugin with PlayExceptions with PlayKeys with PlayReloader with PlayCommands with PlaySettings {
+object PlayProject extends Plugin with PlayExceptions with PlayKeys with PlayReloader with PlayCommands
+    with PlaySettings with PlayPositionMapper {
+
+  if(Option(System.getProperty("play.debug.classpath")).filter(_ == "true").isDefined) {
+    println()
+    this.getClass.getClassLoader.asInstanceOf[sbt.PluginManagement.PluginClassLoader].getURLs.foreach { el =>
+      println(Colors.green(el.toString))
+    }
+    println()
+  }
 
   Option(System.getProperty("play.version")).map {
     case badVersion if badVersion != play.core.PlayVersion.current => {
@@ -39,7 +48,7 @@ object PlayProject extends Plugin with PlayExceptions with PlayKeys with PlayRel
     lazy val playSettings =
       PlayProject.defaultSettings ++ eclipseCommandSettings(mainLang) ++ intellijCommandSettings(mainLang) ++ Seq(testListeners += testListener) ++ whichLang(mainLang) ++ Seq(
         scalacOptions ++= Seq("-deprecation", "-unchecked", "-encoding", "utf8"),
-        javacOptions ++= Seq("-encoding", "utf8", "-g"),
+        javacOptions in Compile ++= Seq("-encoding", "utf8", "-g"),
         version := applicationVersion,
         libraryDependencies ++= dependencies
       )

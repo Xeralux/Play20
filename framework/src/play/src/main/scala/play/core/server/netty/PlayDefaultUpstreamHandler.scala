@@ -28,6 +28,8 @@ import play.api.libs.concurrent.execution.defaultContext
 
 private[server] class PlayDefaultUpstreamHandler(server: Server, allChannels: DefaultChannelGroup) extends SimpleChannelUpstreamHandler with Helpers with WebSocketHandler with RequestBodyHandler {
 
+  private val requestIDs = new java.util.concurrent.atomic.AtomicLong(0)
+
   override def exceptionCaught(ctx: ChannelHandlerContext, e: ExceptionEvent) {
     Logger.trace("Exception caught in Netty", e.getCause)
     e.getChannel.close()
@@ -57,7 +59,7 @@ private[server] class PlayDefaultUpstreamHandler(server: Server, allChannels: De
         Logger("play").trace("Http request received by netty: " + nettyHttpRequest)
         val keepAlive = isKeepAlive(nettyHttpRequest)
         val websocketableRequest = websocketable(nettyHttpRequest)
-        var version = nettyHttpRequest.getProtocolVersion
+        var nettyVersion = nettyHttpRequest.getProtocolVersion
         val nettyUri = new QueryStringDecoder(nettyHttpRequest.getUri)
         val parameters = Map.empty[String, Seq[String]] ++ nettyUri.getParameters.asScala.mapValues(_.asScala)
 
@@ -81,10 +83,13 @@ private[server] class PlayDefaultUpstreamHandler(server: Server, allChannels: De
         //mapping netty request to Play's
 
         val requestHeader = new RequestHeader {
+          val id = requestIDs.incrementAndGet
+          val tags = Map.empty[String,String]
           def uri = nettyHttpRequest.getUri
           def path = nettyUri.getPath
           def method = nettyHttpRequest.getMethod.getName
-          def queryString = parameters
+          def version = nettyVersion.getText
+					def queryString = parameters
           def headers = rHeaders
           lazy val remoteAddress = rRemoteAddress
           def username = None
@@ -127,7 +132,7 @@ private[server] class PlayDefaultUpstreamHandler(server: Server, allChannels: De
                 }
 
                 // Response header Connection: Keep-Alive is needed for HTTP 1.0
-                if (keepAlive && version == HttpVersion.HTTP_1_0) {
+                if (keepAlive && nettyVersion == HttpVersion.HTTP_1_0) {
                   nettyResponse.setHeader(CONNECTION, KEEP_ALIVE)
                 }
 
@@ -352,7 +357,7 @@ private[server] class PlayDefaultUpstreamHandler(server: Server, allChannels: De
               Enumerator(body).andThen(Enumerator.enumInput(EOF))
             }
 
-            eventuallyBodyParser.flatMap(it => bodyEnumerator |>> it): Promise[Iteratee[Array[Byte], Result]]
+            eventuallyBodyParser.flatMap(it => bodyEnumerator |>> it): scala.concurrent.Future[Iteratee[Array[Byte], Result]]
 
           }
 

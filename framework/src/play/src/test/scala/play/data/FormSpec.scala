@@ -8,6 +8,7 @@ import scala.collection.JavaConverters._
 class DummyRequest(data: Map[String, Array[String]]) extends play.mvc.Http.Request {
   def uri() = "/test"
   def method() = "GET"
+  def version() = "HTTP/1.1"
   def path() = "test"
   def host() = "localhost"
   def acceptLanguages = new java.util.ArrayList[play.i18n.Lang]
@@ -51,6 +52,13 @@ object ScalaForms {
       )
     )
 
+    val defaultValuesForm = Form(
+      tuple(
+        "pos" -> default(number, 42),
+        "name" -> default(text, "default text")
+      )
+    )
+
     val helloForm = Form(
       tuple(
         "name" -> nonEmptyText,
@@ -85,6 +93,13 @@ object ScalaForms {
           "foo" -> Forms.text.verifying("first.digit", s => (s.headOption map {_ == '3'}) getOrElse false)
                      .transform[Int](Integer.parseInt _, _.toString).verifying("number.42", _ < 42)
     )
+    
+    val emailForm = Form(
+      tuple(
+        "email" -> email,
+        "name" -> of[String]
+      )
+    )
 }
 
 object FormSpec extends Specification {
@@ -92,21 +107,21 @@ object FormSpec extends Specification {
   "A form" should {
     "be valid" in {
       val req = new DummyRequest(Map("id" -> Array("1234567891"), "name" -> Array("peter"), "done" -> Array("true"), "dueDate" -> Array("15/12/2009")))
-      Context.current.set(new Context(req, Map.empty.asJava, Map.empty.asJava))
+      Context.current.set(new Context(666, req, Map.empty.asJava, Map.empty.asJava, Map.empty.asJava))
 
       val myForm = Controller.form(classOf[play.data.models.Task]).bindFromRequest()
       myForm hasErrors () must beEqualTo(false)
     }
     "be valid with mandatory params passed" in {
       val req = new DummyRequest(Map("id" -> Array("1234567891"), "name" -> Array("peter"), "dueDate" -> Array("15/12/2009")))
-      Context.current.set(new Context(req, Map.empty.asJava, Map.empty.asJava))
+      Context.current.set(new Context(666, req, Map.empty.asJava, Map.empty.asJava, Map.empty.asJava))
 
       val myForm = Controller.form(classOf[play.data.models.Task]).bindFromRequest()
       myForm hasErrors () must beEqualTo(false)
     }
     "have an error due to baldy formatted date" in {
       val req = new DummyRequest(Map("id" -> Array("1234567891"), "name" -> Array("peter"), "dueDate" -> Array("2009/11/11")))
-      Context.current.set(new Context(req, Map.empty.asJava, Map.empty.asJava))
+      Context.current.set(new Context(666, req, Map.empty.asJava, Map.empty.asJava, Map.empty.asJava))
 
       val myForm = Controller.form(classOf[play.data.models.Task]).bindFromRequest()
       myForm hasErrors () must beEqualTo(true)
@@ -114,11 +129,31 @@ object FormSpec extends Specification {
     }
     "have an error due to bad value in Id field" in {
       val req = new DummyRequest(Map("id" -> Array("1234567891x"), "name" -> Array("peter"), "dueDate" -> Array("12/12/2009")))
-      Context.current.set(new Context(req, Map.empty.asJava, Map.empty.asJava))
+      Context.current.set(new Context(666, req, Map.empty.asJava, Map.empty.asJava, Map.empty.asJava))
 
       val myForm = Controller.form(classOf[play.data.models.Task]).bindFromRequest()
       myForm hasErrors () must beEqualTo(true)
 
+    }
+    "have an error due to a malformed email" in {
+      val f5 = ScalaForms.emailForm.fillAndValidate("john@", "John")
+      f5.errors.size must equalTo (1)
+      f5.errors.find(_.message == "error.email") must beSome
+      
+      val f6 = ScalaForms.emailForm.fillAndValidate("john@zen.....com", "John")
+      f6.errors.size must equalTo (1)
+      f6.errors.find(_.message == "error.email") must beSome
+    }
+    
+    "be valid with a well-formed email" in {
+      val f7 = ScalaForms.emailForm.fillAndValidate("john@zen.com", "John")
+      f7.errors.size must equalTo (0)
+      
+      val f8 = ScalaForms.emailForm.fillAndValidate("john@zen.museum", "John")
+      f8.errors.size must equalTo (0)
+      
+      val f9 = ScalaForms.emailForm.fillAndValidate("john@mail.zen.com", "John")
+      f9.errors.size must equalTo(0)
     }
     
     "apply constraints on wrapped mappings" in {
@@ -163,6 +198,16 @@ object FormSpec extends Specification {
   "render form using field[Type] syntax" in {
     val anyData = Map("email" -> "bob@gmail.com", "password" -> "123")
     ScalaForms.loginForm.bind(anyData).get.toString must equalTo("(bob@gmail.com,123)")
+  }
+
+  "support default values" in {
+    ScalaForms.defaultValuesForm.bindFromRequest( Map() ).get must equalTo(42, "default text")
+    ScalaForms.defaultValuesForm.bindFromRequest( Map("name" -> Seq("another text") ) ).get must equalTo(42, "another text")
+    ScalaForms.defaultValuesForm.bindFromRequest( Map("pos" -> Seq("123")) ).get must equalTo(123, "default text")
+    ScalaForms.defaultValuesForm.bindFromRequest( Map("pos" -> Seq("123"), "name" -> Seq("another text")) ).get must equalTo(123, "another text")
+    
+    val f1 = ScalaForms.defaultValuesForm.bindFromRequest( Map("pos" -> Seq("abc")) )
+    f1.errors.size must equalTo (1)
   }
 
   "support repeated values" in {
