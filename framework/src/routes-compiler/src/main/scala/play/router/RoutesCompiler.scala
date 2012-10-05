@@ -44,7 +44,8 @@ object RoutesCompiler {
 
   // --- Parser
 
-  private[router] class RouteFileParser extends JavaTokenParsers {
+  // Xeralux local - make parser public so swagger can use it
+  class RouteFileParser extends JavaTokenParsers {
 
     override def skipWhitespace = false
     override val whiteSpace = """[ \t]+""".r
