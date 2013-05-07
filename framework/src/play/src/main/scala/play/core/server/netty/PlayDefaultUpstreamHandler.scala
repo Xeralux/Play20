@@ -29,7 +29,7 @@ import scala.util.control.NonFatal
 import scala.util.control.Exception
 
 
-private[server] class PlayDefaultUpstreamHandler(server: Server, allChannels: DefaultChannelGroup) extends SimpleChannelUpstreamHandler with Helpers with WebSocketHandler with RequestBodyHandler {
+class PlayDefaultUpstreamHandler(server: Server, allChannels: DefaultChannelGroup) extends SimpleChannelUpstreamHandler with Helpers with WebSocketHandler with RequestBodyHandler {
 
   implicit val internalExecutionContext =  play.core.Execution.internalContext
 
